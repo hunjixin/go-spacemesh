@@ -206,8 +206,8 @@ func LoadConfigFromFile() (*cfg.Config, error) {
 func (app *SpacemeshApp) ParseConfig() error {
 
 	conf, err := LoadConfigFromFile()
-	app.Config = conf
 
+	app.Config = conf
 	return err
 }
 
@@ -249,7 +249,7 @@ func (app *SpacemeshApp) Initialize(cmd *cobra.Command, args []string) (err erro
 	err = app.ParseConfig()
 
 	if err != nil {
-		log.Error(fmt.Sprintf("couldn't parse the config err=%v", err))
+		return fmt.Errorf("couldn't parse the config err=%v", err)
 	}
 
 	// ensure cli flags are higher priority than config file
