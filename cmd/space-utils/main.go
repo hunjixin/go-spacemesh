@@ -6,6 +6,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	_ "net/http/pprof"
+	"os"
+
 	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/mitchellh/mapstructure"
 	pb "github.com/spacemeshos/api/release/go/spacemesh/v1"
@@ -16,8 +19,6 @@ import (
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	_ "net/http/pprof"
-	"os"
 )
 
 var (
@@ -29,7 +30,6 @@ func main() { // run the app
 		Use:   "query",
 		Short: "start node",
 		Run: func(c *cobra.Command, args []string) {
-			fmt.Println(args)
 			ctx := context.Background()
 			if err := run(ctx, path); err != nil {
 				fmt.Println(err.Error())
@@ -98,7 +98,7 @@ func run(ctx context.Context, path string) error {
 
 		fmt.Printf("Name: %s\n", name)
 		fmt.Printf("\tStatus %s\n", status.GetStatus().State)
-		fmt.Printf("\tProgress %d GiB / %d GiB %f\n", name, completed, commitmentSize, completed/commitmentSize)
+		fmt.Printf("\tProgress %d GiB / %d GiB %f\n", completed, commitmentSize, completed/commitmentSize)
 		fmt.Println()
 	}
 
