@@ -17,6 +17,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/mitchellh/mapstructure"
+	"github.com/rodaine/table"
 	pb "github.com/spacemeshos/api/release/go/spacemesh/v1"
 	"github.com/spacemeshos/go-spacemesh/config"
 	"github.com/spacemeshos/go-spacemesh/config/presets"
@@ -63,7 +64,17 @@ func run(ctx context.Context, path string) error {
 		return err
 	}
 
-	return runServe(urlMap)
+	tbl := table.New("机器", "状态", "完成量", "目标量", "完成比例")
+	for machine, url := range urlMap {
+		status, err := getMachineInfo(ctx, machine, url)
+		if err != nil {
+			tbl.AddRow(machine, err.Error())
+			continue
+		}
+		tbl.AddRow(machine, status.State, status.CompletedSize, status.CommitmentSize, status.Percent)
+	}
+	tbl.Print()
+	return nil
 }
 
 func runServe(data map[string]string) error {

@@ -178,6 +178,7 @@ require (
 	github.com/quic-go/webtransport-go v0.5.2 // indirect
 	github.com/raulk/go-watchdog v1.3.0 // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
+	github.com/rodaine/table v1.1.0 // indirect
 	github.com/shirou/gopsutil v3.21.11+incompatible // indirect
 	github.com/spacemeshos/sha256-simd v0.1.0 // indirect
 	github.com/spaolacci/murmur3 v1.1.0 // indirect
