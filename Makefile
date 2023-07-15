@@ -77,6 +77,7 @@ go-spacemesh: get-libs
 
 space-utils:
 	cd cmd/space-utils ; go build -o $(BIN_DIR)$@$(EXE) .
+	cd cmd/space-utils/web ; npm run build; cp -rf ./dist $(BIN_DIR)/dist
 .PHONY: space-utils
 
 bootstrapper:
