@@ -9,6 +9,7 @@ import (
 	_ "net/http/pprof"
 	"os"
 
+	units "github.com/docker/go-units"
 	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/mitchellh/mapstructure"
 	pb "github.com/spacemeshos/api/release/go/spacemesh/v1"
@@ -93,12 +94,12 @@ func run(ctx context.Context, path string) error {
 		        : 0;
 		*/
 
-		commitmentSize := postCfg.LabelsPerUnit * uint64(postCfg.BitsPerLabel) * (1000000) / 8
+		commitmentSize := postCfg.LabelsPerUnit * uint64(postCfg.BitsPerLabel) * (uint64(status.GetStatus().GetOpts().NumUnits)) / 8
 		completed := status.GetStatus().NumLabelsWritten * uint64(postCfg.BitsPerLabel) / 8
 
-		fmt.Printf("Name: %s\n", name)
+		fmt.Printf("Machine: %s\n", name)
 		fmt.Printf("\tStatus %s\n", status.GetStatus().State)
-		fmt.Printf("\tProgress %d GiB / %d GiB %f\n", completed, commitmentSize, completed/commitmentSize)
+		fmt.Printf("\tProgress %s / %s %.2f %%\n", units.BytesSize(float64(completed)), units.BytesSize(float64(commitmentSize)), 100*(float64(completed)/float64(commitmentSize)))
 		fmt.Println()
 	}
 
