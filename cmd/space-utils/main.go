@@ -5,20 +5,20 @@ package main
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
-	"net/http"
 	_ "net/http/pprof"
 	"os"
+	"time"
 
 	units "github.com/docker/go-units"
-	"github.com/gin-contrib/cors"
-	"github.com/gin-contrib/static"
-	"github.com/gin-gonic/gin"
 	"github.com/golang/protobuf/ptypes/empty"
 	"github.com/mitchellh/mapstructure"
+	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/promauto"
+	"github.com/prometheus/client_golang/prometheus/push"
 	"github.com/rodaine/table"
 	pb "github.com/spacemeshos/api/release/go/spacemesh/v1"
+	"github.com/spacemeshos/go-spacemesh/common/types"
 	"github.com/spacemeshos/go-spacemesh/config"
 	"github.com/spacemeshos/go-spacemesh/config/presets"
 	"github.com/spacemeshos/go-spacemesh/node/mapstructureutil"
@@ -26,34 +26,58 @@ import (
 	"github.com/spf13/viper"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
 
 var (
 	path string
 )
 
-func main() { // run the app
-	mycmd := &cobra.Command{
-		Use:   "query",
-		Short: "start node",
-		Run: func(c *cobra.Command, args []string) {
-			ctx := context.Background()
-			if err := run(ctx, path); err != nil {
-				fmt.Println(err.Error())
-			}
-		},
-	}
+var rootCmd = &cobra.Command{
+	Use:   "space-utils",
+	Short: "utils for spacemesh",
+}
 
-	mycmd.Flags().StringVar(&path, "path", "", "url to connect")
+var printCmd = &cobra.Command{
+	Use:   "print",
+	Short: "print status",
+	Run: func(c *cobra.Command, args []string) {
+		ctx := context.Background()
+		if err := print(ctx, path); err != nil {
+			fmt.Println(err.Error())
+		}
+	},
+}
+var metricsCmd = &cobra.Command{
+	Use:   "metrics",
+	Short: "provider metrics for prometheus",
+	Run: func(c *cobra.Command, args []string) {
+		ctx := context.Background()
+		if err := pushDataToPrometheus(ctx, path); err != nil {
+			fmt.Println(err.Error())
+		}
+	},
+}
 
-	if err := mycmd.Execute(); err != nil {
+func init() {
+	rootCmd.Flags().StringVar(&path, "path", "", "config to read")
+}
+
+func main() {
+	rootCmd.AddCommand(printCmd, metricsCmd)
+	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
 }
 
-func run(ctx context.Context, path string) error {
-	urlMap := make(map[string]string)
+type MachineInfo struct {
+	PublicUrl  string `json:"publicUrl"`
+	PrivateUrl string `json:"privateUrl"`
+}
+
+func print(ctx context.Context, path string) error {
+	urlMap := make(map[string]MachineInfo)
 	cfgData, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -64,59 +88,124 @@ func run(ctx context.Context, path string) error {
 		return err
 	}
 
-	tbl := table.New("机器", "状态", "完成量", "目标量", "完成比例")
+	tbl := table.New("机器", "奖励地址", "节点", "GenesisID", "同步状态", "状态", "完成情况")
 	for machine, url := range urlMap {
 		status, err := getMachineInfo(ctx, machine, url)
 		if err != nil {
 			tbl.AddRow(machine, err.Error())
 			continue
 		}
-		tbl.AddRow(machine, status.State, status.CompletedSize, status.CommitmentSize, status.Percent)
+
+		commitStatus := fmt.Sprintf("%s / %s  %s", status.CompletedSize, status.CommitmentSize, status.Percent)
+		var syncStatus string
+		if status.IsSynced {
+			syncStatus = fmt.Sprintf("同步成功 %d/%d", status.CurrentLayerId, status.GenesisEndLayer)
+		} else {
+			syncStatus = fmt.Sprintf("同步失败 %d/%d", status.CurrentLayerId, status.GenesisEndLayer)
+		}
+		tbl.AddRow(machine, status.CoinBase, status.NodeId, status.GenesisId, syncStatus, status.State, commitStatus)
 	}
 	tbl.Print()
 	return nil
 }
 
-func runServe(data map[string]string) error {
-	r := gin.Default()
-	r.Use(static.Serve("/", static.LocalFile("./dist", false)))
-	myCors := cors.DefaultConfig()
-	myCors.AllowAllOrigins = true
-	r.Use(cors.New(myCors))
+func pushDataToPrometheus(ctx context.Context, path string) error {
+	urlMap := make(map[string]MachineInfo)
+	cfgData, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
 
-	r.GET("/api/data", func(c *gin.Context) {
-		c.JSON(http.StatusOK, data)
-	})
-	r.GET("/api/machine/info/:machine", func(c *gin.Context) {
-		machine := c.Param("machine")
-		url, ok := data[machine]
-		if !ok {
-			c.AbortWithError(http.StatusInternalServerError, errors.New("machine not found"))
+	err = json.Unmarshal(cfgData, &urlMap)
+	if err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(time.Second * 5)
+	go func() {
+		select {
+		case <-ctx.Done():
 			return
+		case <-ticker.C:
+			var info = promauto.NewGaugeVec(prometheus.GaugeOpts{
+				Name: "my_table",
+				Help: "This is my table",
+			}, []string{"机器", "奖励地址", "节点", "GenesisID", "同步状态", "状态", "完成情况"})
+
+			for machine, url := range urlMap {
+				status, err := getMachineInfo(ctx, machine, url)
+				if err != nil {
+					fmt.Println(err)
+					info.WithLabelValues(machine, "", "", "", "", "", "")
+					continue
+				}
+
+				commitStatus := fmt.Sprintf("%s / %s  %s", status.CompletedSize, status.CommitmentSize, status.Percent)
+				var syncStatus string
+				if status.IsSynced {
+					syncStatus = fmt.Sprintf("同步成功 %d/%d", status.CurrentLayerId, status.GenesisEndLayer)
+				} else {
+					syncStatus = fmt.Sprintf("同步失败 %d/%d", status.CurrentLayerId, status.GenesisEndLayer)
+				}
+
+				info.WithLabelValues(machine, status.CoinBase, status.NodeId, status.GenesisId, syncStatus, status.State, commitStatus)
+			}
+
+			pusher := push.New("http://localhost:9091", "机器状态")
+			pusher.Collector(info)
+			if err := pusher.Push(); err != nil {
+				fmt.Println("Error pushing to Pushgateway:", err)
+			}
 		}
-		status, err := getMachineInfo(c, machine, url)
-		if err != nil {
-			c.AbortWithError(http.StatusInternalServerError, err)
-			return
-		}
-		c.JSON(http.StatusOK, status)
-	})
-	return r.Run()
+	}()
+	return nil
 }
 
-func getMachineInfo(ctx context.Context, name, url string) (*Status, error) {
-	conn, err := grpc.Dial(url, grpc.WithTransportCredentials(insecure.NewCredentials()))
+func getMachineInfo(ctx context.Context, name string, url MachineInfo) (*Status, error) {
+	publicConn, err := grpc.Dial(url.PublicUrl, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
 	}
 
-	client := pb.NewSmesherServiceClient(conn)
-	status, err := client.PostSetupStatus(ctx, &empty.Empty{})
+	privateConn, err := grpc.Dial(url.PrivateUrl, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		return nil, err
 	}
 
-	postCfg, err := client.PostConfig(ctx, &empty.Empty{})
+	smesherClient := pb.NewSmesherServiceClient(privateConn)
+	status, err := smesherClient.PostSetupStatus(ctx, &empty.Empty{})
+	if err != nil {
+		return nil, err
+	}
+
+	postCfg, err := smesherClient.PostConfig(ctx, &empty.Empty{})
+	if err != nil {
+		return nil, err
+	}
+
+	smeshId, err := smesherClient.SmesherID(ctx, &emptypb.Empty{})
+	if err != nil {
+		return nil, err
+	}
+
+	coinBase, err := smesherClient.Coinbase(ctx, &empty.Empty{})
+	if err != nil {
+		return nil, err
+	}
+
+	nodeClient := pb.NewNodeServiceClient(publicConn)
+	nodeStatus, err := nodeClient.Status(ctx, &pb.StatusRequest{})
+	if err != nil {
+		return nil, err
+	}
+
+	nodeInfo, err := nodeClient.NodeInfo(ctx, &empty.Empty{})
+	if err != nil {
+		return nil, err
+	}
+
+	meshClient := pb.NewMeshServiceClient(publicConn)
+	genesisIDResp, err := meshClient.GenesisID(ctx, &pb.GenesisIDRequest{})
 	if err != nil {
 		return nil, err
 	}
@@ -143,16 +232,22 @@ func getMachineInfo(ctx context.Context, name, url string) (*Status, error) {
 	completed := status.GetStatus().NumLabelsWritten * uint64(postCfg.BitsPerLabel) / 8
 
 	percent := fmt.Sprintf("%.2f %%", 100*(float64(completed)/float64(commitmentSize)))
-	fmt.Printf("Machine: %s\n", name)
-	fmt.Printf("\tStatus %s\n", status.GetStatus().State)
-	fmt.Printf("\tProgress %s / %s %s\n", units.BytesSize(float64(completed)), units.BytesSize(float64(commitmentSize)), percent)
-	fmt.Println()
+
+	genesisId := types.Hash20{}
+	genesisId.SetBytes(genesisIDResp.GenesisId)
 	return &Status{
 		Machine:        name,
 		CompletedSize:  units.BytesSize(float64(completed)),
 		CommitmentSize: units.BytesSize(float64(commitmentSize)),
 		Percent:        percent,
 		State:          status.GetStatus().State.String(),
+
+		CoinBase:        coinBase.AccountId.Address,
+		NodeId:          types.BytesToNodeID(smeshId.PublicKey).String(), //todo
+		GenesisId:       genesisId.Hex(),
+		IsSynced:        nodeStatus.GetStatus().IsSynced,
+		CurrentLayerId:  int(nodeStatus.GetStatus().SyncedLayer.Number),
+		GenesisEndLayer: int(nodeInfo.GetEffectiveGenesis()),
 	}, nil
 }
 
@@ -162,6 +257,14 @@ type Status struct {
 	CompletedSize  string `json:"completedSize"`
 	CommitmentSize string `json:"commitmentSize"`
 	Percent        string `json:"percent"`
+
+	CoinBase  string `json:"coinbase"`
+	NodeId    string `json:"nodeId"`
+	GenesisId string `json:"genesisId"`
+
+	IsSynced        bool `json:"percent"`
+	CurrentLayerId  int  `json:"currentLayerId"`
+	GenesisEndLayer int  `json:"genesisEndLayer"`
 }
 
 // LoadConfigFromFile tries to load configuration file if the config parameter was specified.
