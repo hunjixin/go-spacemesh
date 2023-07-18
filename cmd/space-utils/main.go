@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"github.com/gin-contrib/cors"
 	"github.com/gin-gonic/gin"
-	"github.com/spacemeshos/go-spacemesh/hash"
 	"net/http"
 	_ "net/http/pprof"
 	"os"
@@ -67,7 +66,7 @@ func init() {
 }
 
 func main() {
-
+	types.SetNetworkHRP("sm")
 	if err := rootCmd.Execute(); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -282,12 +281,4 @@ func withZeroFields() viper.DecoderConfigOption {
 	return func(cfg *mapstructure.DecoderConfig) {
 		cfg.ZeroFields = true
 	}
-}
-
-func generateGID(time, extradata []byte) types.Hash32 {
-
-	hh := hash.New()
-	hh.Write([]byte(time))
-	hh.Write([]byte(extradata))
-	return types.BytesToHash(hh.Sum(nil))
 }
