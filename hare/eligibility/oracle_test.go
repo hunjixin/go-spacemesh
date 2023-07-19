@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"math/rand"
 	"os"
 	"strconv"
@@ -40,6 +41,68 @@ func TestMain(m *testing.M) {
 	types.SetLayersPerEpoch(defLayersPerEpoch)
 	res := m.Run()
 	os.Exit(res)
+}
+
+func checkBlock(n int, p fixed.Fixed, vrfFrac fixed.Fixed) uint16 {
+	for x := 0; x < n; x++ {
+		r := fixed.BinCDF(n, p, x) //x 目标值
+		fmt.Printf("n(%d)  p(%f) (%d)'s %f  vrf %f\n", n, p.Float(), x, r.Float(), vrfFrac.Float())
+		if r.GreaterThan(vrfFrac) {
+			// even with large N and large P, x will be << 2^16, so this cast is safe
+			return uint16(x)
+		}
+	}
+	return uint16(n)
+}
+
+func TestCalcEligibility2(t *testing.T) {
+	total := 100000
+	n := 1000
+	p := fixed.DivUint64(uint64(5), uint64(total))
+	miners := make([]int, n)
+
+	fmt.Println("all power ", total)
+	{
+		for i := 0; i < total; i++ {
+			index := rand.Intn(n)
+			miners[index]++
+		}
+	}
+	fmt.Println("randoness miner weight", miners)
+	/*	{
+		average
+			for index, _ := range miners {
+				miners[index] = int(total / n)
+			}
+		}*/
+
+	fmt.Println(miners)
+	allSuccess := 0
+	round := 1
+	for i := 0; i < round; i++ {
+		success := oneRound(miners, p)
+		allSuccess += success
+		fmt.Println(success)
+	}
+
+	fmt.Println("avg ", allSuccess/round)
+}
+
+func oneRound(miners []int, p fixed.Fixed) int {
+	sig := types.RandomVrfSignature()
+	gap := calcVrfFrac(sig)
+
+	var success = 0
+
+	for index, miner := range miners {
+		fmt.Println("miner: ", index)
+		if checkBlock(miner, p, gap) > 0 {
+			success++
+			continue
+		}
+	}
+	return success
+
 }
 
 type testOracle struct {
@@ -216,11 +279,7 @@ func TestCalcEligibility(t *testing.T) {
 		beacon := types.Beacon{1, 0, 0, 0}
 		miners := createLayerData(t, o.cdb, lid.Sub(defLayersPerEpoch), 5)
 		sigs := map[string]uint16{
-			"0516a574aef37257d6811ea53ef55d4cbb0e14674900a0d5165bd6742513840d02442d979fdabc7059645d1e8f8a0f44d0db2aa90f23374dd74a3636d4ecdab7": 1,
-			"73929b4b69090bb6133e2f8cd73989b35228e7e6d8c6745e4100d9c5eb48ca2624ee2889e55124195a130f74ea56e53a73a1c4dee60baa13ad3b1c0ed4f80d9c": 0,
-			"e2c27ad65b752b763173b588518764b6c1e42896d57e0eabef9bcac68e07b87729a4ef9e5f17d8c1cb34ffd0d65ee9a7e63e63b77a7bcab1140a76fc04c271de": 0,
 			"384460966938c87644987fe00c0f9d4f9a5e2dcd4bdc08392ed94203895ba325036725a22346e35aa707993babef716aa1b6b3dfc653a44cb23ac8f743cbbc3d": 1,
-			"15c5f565a75888970059b070bfaed1998a9d423ddac9f6af83da51db02149044ea6aeb86294341c7a950ac5de2855bbebc11cc28b02c08bc903e4cf41439717d": 1,
 		}
 		for vrf, exp := range sigs {
 			sig, err := hex.DecodeString(vrf)
