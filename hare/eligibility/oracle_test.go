@@ -46,7 +46,7 @@ func TestMain(m *testing.M) {
 func checkBlock(n int, p fixed.Fixed, vrfFrac fixed.Fixed) uint16 {
 	for x := 0; x < n; x++ {
 		r := fixed.BinCDF(n, p, x) //x 目标值
-		fmt.Printf("n(%d)  p(%f) (%d)'s %f  vrf %f\n", n, p.Float(), x, r.Float(), vrfFrac.Float())
+		//fmt.Printf("n(%d)  p(%f) (%d)'s %f  vrf %f\n", n, p.Float(), x, r.Float(), vrfFrac.Float())
 		if r.GreaterThan(vrfFrac) {
 			// even with large N and large P, x will be << 2^16, so this cast is safe
 			return uint16(x)
@@ -57,45 +57,52 @@ func checkBlock(n int, p fixed.Fixed, vrfFrac fixed.Fixed) uint16 {
 
 func TestCalcEligibility2(t *testing.T) {
 	total := 100000
-	n := 1000
+	n := 10000
 	p := fixed.DivUint64(uint64(5), uint64(total))
 	miners := make([]int, n)
 
 	fmt.Println("all power ", total)
+	/*	{
+			for i := 0; i < total; i++ {
+				index := rand.Intn(n)
+				miners[index]++
+			}
+		}
+	*/
+
 	{
-		for i := 0; i < total; i++ {
-			index := rand.Intn(n)
-			miners[index]++
+		for index, _ := range miners {
+			miners[index] = int(total / n)
 		}
 	}
 	fmt.Println("randoness miner weight", miners)
-	/*	{
-		average
-			for index, _ := range miners {
-				miners[index] = int(total / n)
-			}
-		}*/
-
 	fmt.Println(miners)
 	allSuccess := 0
-	round := 1
+	round := 50
+	lk := sync.Mutex{}
+	wg := sync.WaitGroup{}
 	for i := 0; i < round; i++ {
-		success := oneRound(miners, p)
-		allSuccess += success
-		fmt.Println(success)
+		go func(index int) {
+			wg.Add(1)
+			defer wg.Done()
+			success := oneRound(miners, p)
+			lk.Lock()
+			allSuccess += success
+			fmt.Println(success)
+			lk.Unlock()
+		}(i)
 	}
 
+	wg.Wait()
 	fmt.Println("avg ", allSuccess/round)
 }
 
 func oneRound(miners []int, p fixed.Fixed) int {
-	sig := types.RandomVrfSignature()
-	gap := calcVrfFrac(sig)
-
 	var success = 0
-
-	for index, miner := range miners {
-		fmt.Println("miner: ", index)
+	for _, miner := range miners {
+		sig := types.RandomVrfSignature()
+		gap := calcVrfFrac(sig)
+		//	fmt.Println("miner: ", index)
 		if checkBlock(miner, p, gap) > 0 {
 			success++
 			continue
